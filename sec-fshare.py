@@ -95,21 +95,22 @@ aes_key_256 = get_random_bytes(16)
 # CBC modunda AES ile dosya sifreleme
 def encrypt_file(file_path: str, key: bytes) -> FileStorage:
     cipher = AES.new(key, AES.MODE_CBC)
+    iv = cipher.iv
     with open(file_path, "rb") as f:
         data = f.read()
     ct_bytes = cipher.encrypt(pad(data, AES.block_size))
     file_storage = FileStorage(
-        io.BytesIO(ct_bytes), filename=os.path.basename(file_path) + ".enc"
+        io.BytesIO(iv + ct_bytes), filename=os.path.basename(file_path) + ".enc"
     )
     return file_storage
 
 
 # CBC modunda AES ile sifrelenen dosyayi cozme
 def decrypt_file(file_path: str, key: bytes) -> FileStorage:
-    iv = b"\x00" * 16
-    cipher = AES.new(key, AES.MODE_CBC, iv=iv)
     with open(file_path, "rb") as f:
+        iv = f.read(16)
         data = f.read()
+    cipher = AES.new(key, AES.MODE_CBC, iv=iv)
     pt = unpad(cipher.decrypt(data), AES.block_size)
     decrypted_file = FileStorage(
         io.BytesIO(pt), filename=os.path.basename(file_path)[:-4]
@@ -476,12 +477,13 @@ def download(filename):
     )
     decrypted_file.save(os.path.join(UPLOAD_FOLDER, "encrypted", filename))
 
+    # md5 dogruysa dosya client tarafindan indirilebilir
     if check_md5(
-        os.path.join(UPLOAD_FOLDER, decrypted_file.filename),
+        os.path.join(UPLOAD_FOLDER, "encrypted", decrypted_file.filename),
         os.path.join(UPLOAD_FOLDER, "encrypted", decrypted_file.filename) + ".md5",
     ):
         return send_from_directory(
-            directory=os.path.join(UPLOAD_FOLDER),
+            directory=os.path.join(UPLOAD_FOLDER, "encrypted"),
             path=decrypted_file.filename,
             as_attachment=True,
         )
