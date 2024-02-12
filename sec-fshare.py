@@ -53,11 +53,7 @@ parser.add_argument(
 )
 args = parser.parse_args()
 
-## argumanlara kisitla ekleyebilirim, sadece o iplerde indirilebilsin diye, bu da ek özellik olur
-## dosyanın folder olup olmadığını sen anla
-
 UPLOAD_FOLDER = args.folderpath
-
 
 # https://stackoverflow.com/questions/166506/finding-local-ip-addresses-using-pythons-stdlib/28950776#28950776
 def get_ip():
@@ -78,6 +74,7 @@ if "".join(args.iplist.split()) != "":
     iplistsp = [each_ip.strip() for each_ip in args.iplist.split(",")]
     iplistsp[:] = [x for x in iplistsp if x.strip()]
 
+# kendi ip adresini izin verilen (beyaz) listeye ekle
 allowed_ips = [get_ip()]
 
 # verilen ip listesini izin verilen (beyaz) listeye ekle
@@ -85,11 +82,11 @@ for each_ip in iplistsp:
     if each_ip not in allowed_ips:
         allowed_ips.append(each_ip)
 
+# flask uygulamasının kendi guvenligi icin secret key olustur
 app = Flask(__name__)
 app.secret_key = os.urandom(24)  # 192 bit
 
-aes_key_256 = get_random_bytes(16)
-# b'\x84\xe19{Ww\xff\xeb\x9d\xda\xd3\x17$,\x19\xfdJKL\xc5\xd6\xf1\x97\x91c\xfd\x83\xd8\xb8m\xdf\xe7'
+aes_key_256 = get_random_bytes(16)  # AES-128 icin 16 byte key
 
 
 # CBC modunda AES ile dosya sifreleme
@@ -144,6 +141,7 @@ def check_md5(file_path, md5_file_path):
     return calculated_md5 == expected_md5
 
 
+# giris yapmak icin parola iste
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if "all" not in allowed_ips:
@@ -188,6 +186,7 @@ def login():
     """
 
 
+# upload sayfası, aynı zamanda downloada da buradan yonlendirme yapiliyor, ana sayfa gibi de dusunulebilir
 @app.route("/", methods=["GET", "POST"])
 def upload():
     if not session.get("logged_in"):
@@ -202,12 +201,13 @@ def upload():
                     403,
                 )  # beyaz listede degilse yetkisiz erisim
 
+        # burada yeni dosyayı upload ederken şifrele ve oyle kaydet bir yandan md5ini de olustur
         file = request.files["files"]
         file.save(os.path.join(UPLOAD_FOLDER, file.filename))
         generate_and_save_md5(UPLOAD_FOLDER, file.filename)
         enc_file = encrypt_file(os.path.join(UPLOAD_FOLDER, file.filename), aes_key_256)
         enc_file.save(os.path.join(UPLOAD_FOLDER, "encrypted", enc_file.filename))
-        # os.remove(os.path.join(UPLOAD_FOLDER, file.filename))
+        os.remove(os.path.join(UPLOAD_FOLDER, file.filename))
 
         files = [
             f
@@ -226,7 +226,7 @@ def upload():
             [f'<a href="/downloads/{file[:-4]}">{file[:-4]}</a>' for file in files]
         )
 
-        # <p style="color:green;">File uploaded successfully</p>
+        # drag and dropla dosya da yuklenebilecek javascriptli web html sayfasi
         return f"""
             <!doctype html>
             <title>Upload and Download Files</title>
@@ -327,6 +327,9 @@ def upload():
         if not os.path.exists(os.path.join(UPLOAD_FOLDER, "encrypted")):
             os.makedirs(os.path.join(UPLOAD_FOLDER, "encrypted"))
 
+        # burada paylaşılacak folderdaki dosyaları şifreleyip encrypted klasörüne at ve web sayfasında listele
+        # encrypted olan dosyalar .enc uzantısı gozukmeyecek sekilde web sayfasında listelenir
+        # her dosya icin md5 özeti olusturup filename.md5 dosyasina kaydet
         for each_file in os.listdir(UPLOAD_FOLDER):
             if (
                 each_file.strip() != "encrypted"
@@ -358,6 +361,7 @@ def upload():
             [f'<a href="/downloads/{file[:-4]}">{file[:-4]}</a>' for file in files]
         )
 
+        # drag and dropla dosya da yuklenebilecek javascriptli web html sayfasi
         return f"""
             <!doctype html>
             <title>Upload and Download Files</title>
@@ -447,19 +451,8 @@ def upload():
             {file_list}
             """
 
-    # return f"""
-    # <!doctype html>
-    # <title>Upload a File</title>
-    # <h1>Upload a File</h1>
-    # <form method=post enctype=multipart/form-data>
-    #  <input type=file name=file>
-    #  <input type=submit value=Upload>
-    # </form>
-    # <h1>Download a File</h1>
-    # {file_list}
-    # """
 
-
+# dosyayi indirme sayfasi, listelenen dosyalardan birine tiklayinca buraya yonlendiriyor
 @app.route("/downloads/<path:filename>", methods=["GET", "POST"])
 def download(filename):
     if not session.get("logged_in"):
@@ -491,6 +484,7 @@ def download(filename):
         return "MD5 check failed. File is corrupted!", 500
 
 
+# eger ctrl+c ile server kapatilirsa encrypted klasorunu sil
 def signal_handler(sig, frame):
     if os.path.exists(os.path.join(UPLOAD_FOLDER, "encrypted")):
         shutil.rmtree(os.path.join(UPLOAD_FOLDER, "encrypted"))
@@ -501,9 +495,9 @@ def signal_handler(sig, frame):
 signal.signal(signal.SIGINT, signal_handler)
 
 if __name__ == "__main__":
-    # context = ("192.168.1.22.pem", "192.168.1.22-key.pem")
-    # app.run(host=get_ip(), port=8080, ssl_context=context)
-    # app.run(host=get_ip(), port=8080)  # , ssl_context="adhoc")
+    # eger encrypted klasoru varsa baslatmadan once sil
+    # encrypted klasoru server uzerinde sifrelenmis dosyalar ve md5lerin tutuldugu klasor olacak
     if os.path.exists(os.path.join(UPLOAD_FOLDER, "encrypted")):
         shutil.rmtree(os.path.join(UPLOAD_FOLDER, "encrypted"))
+    # serveri baslat
     app.run(host=get_ip(), port=8080, ssl_context="adhoc")
