@@ -1,5 +1,14 @@
-from flask import Flask, request, send_from_directory
+from flask import (
+    Flask,
+    request,
+    redirect,
+    url_for,
+    send_from_directory,
+    session,
+    render_template,
+)
 import os
+import sys
 
 import socket
 
@@ -54,9 +63,52 @@ for each_ip in iplist:
     if each_ip not in allowed_ips:
         allowed_ips.append(each_ip)
 
+app = Flask(__name__)
+app.secret_key = os.urandom(24)
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    client_ip = request.remote_addr  # istemci ip adresi
+    if client_ip not in allowed_ips:
+        return (
+            "Access Denied. Unauthorized IP Address!",
+            403,
+        )  # beyaz listede degilse yetkisiz erisim
+
+    if request.method == "POST":
+        password = request.form["password"]
+        if password == "admin":  # parola kontrol
+            session["logged_in"] = True
+            return redirect(url_for("upload"))
+        else:
+            return """
+            <!doctype html>
+            <title>Login</title>
+            <h1>Login</h1>
+            <p>Invalid password</p>
+            <form method="post" action="">
+            <input type="password" name="password" placeholder="Enter password" required>
+            <input type="submit" value="Login">
+            </form>
+            """
+
+    return """
+    <!doctype html>
+    <title>Login</title>
+    <h1>Login</h1>
+    <form method="post" action="">
+    <input type="password" name="password" placeholder="Enter password" required>
+    <input type="submit" value="Login">
+    </form>
+    """
+
 
 @app.route("/", methods=["GET", "POST"])
-def upload_file():
+def upload():
+    if not session.get("logged_in"):
+        return redirect(url_for("login"))
+
     if request.method == "POST":
         file = request.files["file"]
         file.save(os.path.join(UPLOAD_FOLDER, file.filename))
@@ -68,11 +120,14 @@ def upload_file():
                 "Access Denied. Unauthorized IP Address!",
                 403,
             )  # beyaz listede degilse yetkisiz erisim
-        files = os.listdir(UPLOAD_FOLDER)
-        file_list = "<br>".join(
-            [f'<a href="/downloads/{file}">{file}</a>' for file in files]
-        )
-        return f"""
+
+    files = os.listdir(UPLOAD_FOLDER)
+    files.remove(sys.argv[0])
+    file_list = "<br>".join(
+        [f'<a href="/downloads/{file}">{file}</a>' for file in files]
+    )
+
+    return f"""
         <!doctype html>
         <title>Upload and Download Files</title>
         <h1>Upload a File</h1>
@@ -161,17 +216,17 @@ def upload_file():
         {file_list}
         """
 
-        # return f"""
-        # <!doctype html>
-        # <title>Upload a File</title>
-        # <h1>Upload a File</h1>
-        # <form method=post enctype=multipart/form-data>
-        #  <input type=file name=file>
-        #  <input type=submit value=Upload>
-        # </form>
-        # <h1>Download a File</h1>
-        # {file_list}
-        # """
+    # return f"""
+    # <!doctype html>
+    # <title>Upload a File</title>
+    # <h1>Upload a File</h1>
+    # <form method=post enctype=multipart/form-data>
+    #  <input type=file name=file>
+    #  <input type=submit value=Upload>
+    # </form>
+    # <h1>Download a File</h1>
+    # {file_list}
+    # """
 
 
 @app.route("/downloads/<path:filename>", methods=["GET", "POST"])
