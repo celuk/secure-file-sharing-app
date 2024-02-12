@@ -29,6 +29,8 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.backends import default_backend
 
+import hashlib
+
 app = Flask(__name__)
 
 parser = argparse.ArgumentParser(description="Specify paths, ips and password")
@@ -115,6 +117,32 @@ def decrypt_file(file_path: str, key: bytes) -> FileStorage:
     return decrypted_file
 
 
+# her dosya icin md5 özeti olusturup .md5 dosyasina kaydet
+def generate_and_save_md5(file_path, file_name):
+    hash_md5 = hashlib.md5()
+    with open(os.path.join(file_path, file_name), "rb") as f:
+        for chunk in iter(lambda: f.read(4096), b""):
+            hash_md5.update(chunk)
+    md5_digest = hash_md5.hexdigest()
+
+    with open(os.path.join(file_path, "encrypted", file_name) + ".md5", "w") as f:
+        f.write(md5_digest)
+
+
+# decrypt edilen dosyanın md5i ile orjinal dosyanın md5i aynı mı diye kontrol et
+def check_md5(file_path, md5_file_path):
+    with open(md5_file_path, "r") as f:
+        expected_md5 = f.read().strip()
+
+    hash_md5 = hashlib.md5()
+    with open(file_path, "rb") as f:
+        for chunk in iter(lambda: f.read(4096), b""):
+            hash_md5.update(chunk)
+    calculated_md5 = hash_md5.hexdigest()
+
+    return calculated_md5 == expected_md5
+
+
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if "all" not in allowed_ips:
@@ -175,9 +203,10 @@ def upload():
 
         file = request.files["files"]
         file.save(os.path.join(UPLOAD_FOLDER, file.filename))
+        generate_and_save_md5(UPLOAD_FOLDER, file.filename)
         enc_file = encrypt_file(os.path.join(UPLOAD_FOLDER, file.filename), aes_key_256)
         enc_file.save(os.path.join(UPLOAD_FOLDER, "encrypted", enc_file.filename))
-        os.remove(os.path.join(UPLOAD_FOLDER, file.filename))
+        # os.remove(os.path.join(UPLOAD_FOLDER, file.filename))
 
         files = [
             f
@@ -303,6 +332,7 @@ def upload():
                 and each_file.strip() != sys.argv[0]
                 and each_file.strip() != sys.argv[0] + ".enc"
             ):
+                generate_and_save_md5(UPLOAD_FOLDER, each_file)
                 each_out = encrypt_file(
                     os.path.join(UPLOAD_FOLDER, each_file), aes_key_256
                 )
@@ -446,9 +476,17 @@ def download(filename):
     )
     decrypted_file.save(os.path.join(UPLOAD_FOLDER, "encrypted", filename))
 
-    return send_from_directory(
-        directory=UPLOAD_FOLDER, path=decrypted_file.filename, as_attachment=True
-    )
+    if check_md5(
+        os.path.join(UPLOAD_FOLDER, "encrypted", decrypted_file.filename),
+        os.path.join(UPLOAD_FOLDER, "encrypted", decrypted_file.filename) + ".md5",
+    ):
+        return send_from_directory(
+            directory=os.path.join(UPLOAD_FOLDER, "encrypted"),
+            path=decrypted_file.filename,
+            as_attachment=True,
+        )
+    else:
+        return "MD5 check failed. File is corrupted!", 500
 
 
 def signal_handler(sig, frame):
