@@ -11,6 +11,8 @@ from markupsafe import escape
 import socket
 
 import os
+import shutil
+import signal
 import sys
 import argparse
 
@@ -23,12 +25,9 @@ from werkzeug.datastructures import FileStorage
 
 app = Flask(__name__)
 
-parser = argparse.ArgumentParser(description="Specify paths to upload")
+parser = argparse.ArgumentParser(description="Specify paths, ips and password")
 parser.add_argument(
-    "-fp", "--filepath", type=str, help="Specify full file path", default="."
-)
-parser.add_argument(
-    "-fo", "--folder", type=str, help="Specify full folder path", default="."
+    "-fp", "--folderpath", type=str, help="Specify upload folder path", default="."
 )
 parser.add_argument(
     "-ips",
@@ -49,10 +48,7 @@ args = parser.parse_args()
 ## argumanlara kisitla ekleyebilirim, sadece o iplerde indirilebilsin diye, bu da ek özellik olur
 ## dosyanın folder olup olmadığını sen anla
 
-UPLOAD_FOLDER = args.filepath
-
-aes_key_256 = get_random_bytes(32)
-# b'\x84\xe19{Ww\xff\xeb\x9d\xda\xd3\x17$,\x19\xfdJKL\xc5\xd6\xf1\x97\x91c\xfd\x83\xd8\xb8m\xdf\xe7'
+UPLOAD_FOLDER = args.folderpath
 
 
 # https://stackoverflow.com/questions/166506/finding-local-ip-addresses-using-pythons-stdlib/28950776#28950776
@@ -83,6 +79,9 @@ for each_ip in iplistsp:
 
 app = Flask(__name__)
 app.secret_key = os.urandom(24)  # 192 bit
+
+aes_key_256 = get_random_bytes(32)
+# b'\x84\xe19{Ww\xff\xeb\x9d\xda\xd3\x17$,\x19\xfdJKL\xc5\xd6\xf1\x97\x91c\xfd\x83\xd8\xb8m\xdf\xe7'
 
 
 # CBC modunda AES ile dosya sifreleme
@@ -237,8 +236,10 @@ def upload():
                 )  # beyaz listede degilse yetkisiz erisim
 
         file = request.files["files"]
-        enc_file = encrypt_file(os.path.join(UPLOAD_FOLDER, file), aes_key_256)
-        enc_file.save(os.path.join(UPLOAD_FOLDER, "encrypted", enc_file + ".enc"))
+        file.save(os.path.join(UPLOAD_FOLDER, file.filename))
+        enc_file = encrypt_file(os.path.join(UPLOAD_FOLDER, file.filename), aes_key_256)
+        enc_file.save(os.path.join(UPLOAD_FOLDER, "encrypted", enc_file.filename))
+        os.remove(os.path.join(UPLOAD_FOLDER, file.filename))
 
         files = os.listdir(os.path.join(UPLOAD_FOLDER, "encrypted"))
         if "encrypted" in files:
@@ -247,8 +248,10 @@ def upload():
             files.remove(sys.argv[0])
         if sys.argv[0] + ".enc" in files:
             files.remove(sys.argv[0] + ".enc")
+
+        files.sort()
         file_list = "<br>".join(
-            [f'<a href="/downloads/{file}">{file}</a>' for file in files]
+            [f'<a href="/downloads/{file[:-4]}">{file[:-4]}</a>' for file in files]
         )
 
         # <p style="color:green;">File uploaded successfully</p>
@@ -349,9 +352,6 @@ def upload():
                     403,
                 )  # beyaz listede degilse yetkisiz erisim
 
-        if os.path.exists(os.path.join(UPLOAD_FOLDER, "encrypted")):
-            os.removedirs(os.path.join(UPLOAD_FOLDER, "encrypted"))
-
         if not os.path.exists(os.path.join(UPLOAD_FOLDER, "encrypted")):
             os.makedirs(os.path.join(UPLOAD_FOLDER, "encrypted"))
 
@@ -375,8 +375,10 @@ def upload():
             files.remove(sys.argv[0])
         if sys.argv[0] + ".enc" in files:
             files.remove(sys.argv[0] + ".enc")
+
+        files.sort()
         file_list = "<br>".join(
-            [f'<a href="/downloads/{file}">{file}</a>' for file in files]
+            [f'<a href="/downloads/{file[:-4]}">{file[:-4]}</a>' for file in files]
         )
 
         return f"""
@@ -494,19 +496,30 @@ def download(filename):
                 403,
             )  # beyaz listede degilse yetkisiz erisim
     decrypted_file = decrypt_file(
-        os.path.join(UPLOAD_FOLDER, "encrypted", filename), aes_key_256
+        os.path.join(UPLOAD_FOLDER, "encrypted", filename + ".enc"), aes_key_256
     )
-    decrypted_file.save(os.path.join(UPLOAD_FOLDER, "encrypted", filename[:-4]))
+    decrypted_file.save(os.path.join(UPLOAD_FOLDER, "encrypted", filename))
 
     return send_from_directory(
         directory=UPLOAD_FOLDER,
-        path=os.path.join(UPLOAD_FOLDER, "encrypted", filename[:-4]),
+        path=decrypted_file.filename,
         as_attachment=True,
     )
 
+
+def signal_handler(sig, frame):
+    if os.path.exists(os.path.join(UPLOAD_FOLDER, "encrypted")):
+        shutil.rmtree(os.path.join(UPLOAD_FOLDER, "encrypted"))
+
+    sys.exit(0)
+
+
+signal.signal(signal.SIGINT, signal_handler)
 
 if __name__ == "__main__":
     # context = ("192.168.1.22.pem", "192.168.1.22-key.pem")
     # app.run(host=get_ip(), port=8080, ssl_context=context)
     # app.run(host=get_ip(), port=8080)  # , ssl_context="adhoc")
+    if os.path.exists(os.path.join(UPLOAD_FOLDER, "encrypted")):
+        shutil.rmtree(os.path.join(UPLOAD_FOLDER, "encrypted"))
     app.run(host=get_ip(), port=8080, ssl_context="adhoc")
