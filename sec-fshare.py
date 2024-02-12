@@ -20,6 +20,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 
 from Crypto.Cipher import AES
 from Crypto.Random import get_random_bytes
+from Crypto.Util.Padding import pad, unpad
 import io
 from werkzeug.datastructures import FileStorage
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
@@ -91,44 +92,27 @@ aes_key_256 = get_random_bytes(16)
 
 # CBC modunda AES ile dosya sifreleme
 def encrypt_file(file_path: str, key: bytes) -> FileStorage:
-    cipher = Cipher(
-        algorithms.AES(key), modes.CBC(os.urandom(16)), backend=default_backend()
+    cipher = AES.new(key, AES.MODE_CBC)
+    with open(file_path, "rb") as f:
+        data = f.read()
+    ct_bytes = cipher.encrypt(pad(data, AES.block_size))
+    file_storage = FileStorage(
+        io.BytesIO(ct_bytes), filename=os.path.basename(file_path) + ".enc"
     )
-    encryptor = cipher.encryptor()
-
-    padder = padding.PKCS7(128).padder()
-
-    encrypted_data = io.BytesIO()
-    with open(file_path, "rb") as file:
-        while True:
-            chunk = file.read(64 * 1024)
-            if len(chunk) == 0:
-                break
-            encrypted_data.write(encryptor.update(padder.update(chunk)))
-        encrypted_data.write(encryptor.update(padder.finalize()))
-        encrypted_data.write(encryptor.finalize())
-    encrypted_data.seek(0)
-
-    return FileStorage(encrypted_data, filename=file_path + ".enc")
+    return file_storage
 
 
 # CBC modunda AES ile sifrelenen dosyayi cozme
 def decrypt_file(file_path: str, key: bytes) -> FileStorage:
-    with open(file_path, "rb") as file:
-        encrypted_data = file.read()
-
-    iv = encrypted_data[:16]
-    cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
-    decryptor = cipher.decryptor()
-
-    unpadder = padding.PKCS7(128).unpadder()
-
-    decrypted_data = io.BytesIO()
-    decrypted_data.write(unpadder.update(decryptor.update(encrypted_data[16:])))
-    decrypted_data.write(unpadder.update(decryptor.finalize()))
-    decrypted_data.seek(0)
-
-    return FileStorage(decrypted_data, filename=file_path[:-4])
+    iv = b"\x00" * 16
+    cipher = AES.new(key, AES.MODE_CBC, iv=iv)
+    with open(file_path, "rb") as f:
+        data = f.read()
+    pt = unpad(cipher.decrypt(data), AES.block_size)
+    decrypted_file = FileStorage(
+        io.BytesIO(pt), filename=os.path.basename(file_path)[:-4]
+    )
+    return decrypted_file
 
 
 @app.route("/login", methods=["GET", "POST"])
@@ -195,7 +179,11 @@ def upload():
         enc_file.save(os.path.join(UPLOAD_FOLDER, "encrypted", enc_file.filename))
         os.remove(os.path.join(UPLOAD_FOLDER, file.filename))
 
-        files = os.listdir(os.path.join(UPLOAD_FOLDER, "encrypted"))
+        files = [
+            f
+            for f in os.listdir(os.path.join(UPLOAD_FOLDER, "encrypted"))
+            if f.endswith(".enc")
+        ]
         if "encrypted" in files:
             files.remove("encrypted")
         if sys.argv[0] in files:
@@ -322,7 +310,11 @@ def upload():
                     os.path.join(UPLOAD_FOLDER, "encrypted", each_file + ".enc")
                 )
 
-        files = os.listdir(os.path.join(UPLOAD_FOLDER, "encrypted"))
+        files = [
+            f
+            for f in os.listdir(os.path.join(UPLOAD_FOLDER, "encrypted"))
+            if f.endswith(".enc")
+        ]
         if "encrypted" in files:
             files.remove("encrypted")
         if sys.argv[0] in files:
@@ -455,9 +447,7 @@ def download(filename):
     decrypted_file.save(os.path.join(UPLOAD_FOLDER, "encrypted", filename))
 
     return send_from_directory(
-        directory=UPLOAD_FOLDER,
-        path=decrypted_file.filename,
-        as_attachment=True,
+        directory=UPLOAD_FOLDER, path=decrypted_file.filename, as_attachment=True
     )
 
 
