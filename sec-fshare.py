@@ -22,6 +22,11 @@ from Crypto.Cipher import AES
 from Crypto.Random import get_random_bytes
 import io
 from werkzeug.datastructures import FileStorage
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.primitives import padding
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.backends import default_backend
 
 app = Flask(__name__)
 
@@ -80,101 +85,50 @@ for each_ip in iplistsp:
 app = Flask(__name__)
 app.secret_key = os.urandom(24)  # 192 bit
 
-aes_key_256 = get_random_bytes(32)
+aes_key_256 = get_random_bytes(16)
 # b'\x84\xe19{Ww\xff\xeb\x9d\xda\xd3\x17$,\x19\xfdJKL\xc5\xd6\xf1\x97\x91c\xfd\x83\xd8\xb8m\xdf\xe7'
 
 
 # CBC modunda AES ile dosya sifreleme
 def encrypt_file(file_path: str, key: bytes) -> FileStorage:
-    chunk_size = 64 * 1024
-    with open(file_path, "rb") as file:
-        encrypted_data = io.BytesIO()
-        encrypted_data.write(file.read())
-        encrypted_data.seek(0)
+    cipher = Cipher(
+        algorithms.AES(key), modes.CBC(os.urandom(16)), backend=default_backend()
+    )
+    encryptor = cipher.encryptor()
 
-        cipher = AES.new(key, AES.MODE_CBC)
-        encrypted_file = io.BytesIO()
-        encrypted_file.write(cipher.encrypt(get_random_bytes(16)))
+    padder = padding.PKCS7(128).padder()
+
+    encrypted_data = io.BytesIO()
+    with open(file_path, "rb") as file:
         while True:
-            chunk = encrypted_data.read(chunk_size)
+            chunk = file.read(64 * 1024)
             if len(chunk) == 0:
                 break
-            elif len(chunk) % 16 != 0:
-                chunk += b" " * (16 - len(chunk) % 16)
-            encrypted_file.write(cipher.encrypt(chunk))
-        encrypted_file.seek(0)
+            encrypted_data.write(encryptor.update(padder.update(chunk)))
+        encrypted_data.write(encryptor.update(padder.finalize()))
+        encrypted_data.write(encryptor.finalize())
+    encrypted_data.seek(0)
 
-        encrypted_file_storage = FileStorage(
-            encrypted_file, filename=file_path + ".enc"
-        )
-        return encrypted_file_storage
-
-
-"""
-def encrypt_file(file_path, key):
-    chunk_size = 64 * 1024
-    output_file = file_path + ".enc"
-
-    cipher = AES.new(key, AES.MODE_CBC)
-
-    with open(file_path, "rb") as infile:
-        with open(output_file, "wb") as outfile:
-            outfile.write(cipher.encrypt(get_random_bytes(16)))
-            while True:
-                chunk = infile.read(chunk_size)
-                if len(chunk) == 0:
-                    break
-                elif len(chunk) % 16 != 0:
-                    chunk += b" " * (16 - len(chunk) % 16)
-                outfile.write(cipher.encrypt(chunk))
-
-    return output_file
-"""
+    return FileStorage(encrypted_data, filename=file_path + ".enc")
 
 
 # CBC modunda AES ile sifrelenen dosyayi cozme
 def decrypt_file(file_path: str, key: bytes) -> FileStorage:
-    chunk_size = 64 * 1024
     with open(file_path, "rb") as file:
-        decrypted_data = io.BytesIO()
-        decrypted_data.write(file.read())
-        decrypted_data.seek(0)
+        encrypted_data = file.read()
 
-        cipher = AES.new(key, AES.MODE_CBC)
-        decrypted_file = io.BytesIO()
-        iv = decrypted_data.read(16)
-        while True:
-            chunk = decrypted_data.read(chunk_size)
-            if len(chunk) == 0:
-                break
-            decrypted_chunk = cipher.decrypt(chunk)
-            decrypted_file.write(decrypted_chunk.rstrip(b" "))
-        decrypted_file.seek(0)
+    iv = encrypted_data[:16]
+    cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
+    decryptor = cipher.decryptor()
 
-        decrypted_file_storage = FileStorage(decrypted_file, filename=file_path[:-4])
-        return decrypted_file_storage
+    unpadder = padding.PKCS7(128).unpadder()
 
+    decrypted_data = io.BytesIO()
+    decrypted_data.write(unpadder.update(decryptor.update(encrypted_data[16:])))
+    decrypted_data.write(unpadder.update(decryptor.finalize()))
+    decrypted_data.seek(0)
 
-"""
-def decrypt_file(encrypted_file, key):
-    chunk_size = 64 * 1024
-    output_file = encrypted_file[:-4]
-
-    cipher = AES.new(key, AES.MODE_CBC)
-
-    # Dosya okuma ve çözme işlemi
-    with open(encrypted_file, "rb") as infile:
-        with open(output_file, "wb") as outfile:
-            iv = infile.read(16)
-            while True:
-                chunk = infile.read(chunk_size)
-                if len(chunk) == 0:
-                    break
-                decrypted_chunk = cipher.decrypt(chunk)
-                outfile.write(decrypted_chunk.rstrip(b" "))
-
-    return output_file
-"""
+    return FileStorage(decrypted_data, filename=file_path[:-4])
 
 
 @app.route("/login", methods=["GET", "POST"])
