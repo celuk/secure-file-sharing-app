@@ -477,11 +477,11 @@ def download(filename):
     decrypted_file.save(os.path.join(UPLOAD_FOLDER, "encrypted", filename))
 
     if check_md5(
-        os.path.join(UPLOAD_FOLDER, "encrypted", decrypted_file.filename),
+        os.path.join(UPLOAD_FOLDER, decrypted_file.filename),
         os.path.join(UPLOAD_FOLDER, "encrypted", decrypted_file.filename) + ".md5",
     ):
         return send_from_directory(
-            directory=os.path.join(UPLOAD_FOLDER, "encrypted"),
+            directory=os.path.join(UPLOAD_FOLDER),
             path=decrypted_file.filename,
             as_attachment=True,
         )
