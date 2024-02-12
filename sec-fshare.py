@@ -18,6 +18,8 @@ from werkzeug.security import generate_password_hash, check_password_hash
 
 from Crypto.Cipher import AES
 from Crypto.Random import get_random_bytes
+import io
+from werkzeug.datastructures import FileStorage
 
 app = Flask(__name__)
 
@@ -49,7 +51,7 @@ args = parser.parse_args()
 
 UPLOAD_FOLDER = args.filepath
 
-aes_key_256 = get_random_bytes(32)  
+aes_key_256 = get_random_bytes(32)
 # b'\x84\xe19{Ww\xff\xeb\x9d\xda\xd3\x17$,\x19\xfdJKL\xc5\xd6\xf1\x97\x91c\xfd\x83\xd8\xb8m\xdf\xe7'
 
 
@@ -84,6 +86,32 @@ app.secret_key = os.urandom(24)  # 192 bit
 
 
 # CBC modunda AES ile dosya sifreleme
+def encrypt_file(file_path: str, key: bytes) -> FileStorage:
+    chunk_size = 64 * 1024
+    with open(file_path, "rb") as file:
+        encrypted_data = io.BytesIO()
+        encrypted_data.write(file.read())
+        encrypted_data.seek(0)
+
+        cipher = AES.new(key, AES.MODE_CBC)
+        encrypted_file = io.BytesIO()
+        encrypted_file.write(cipher.encrypt(get_random_bytes(16)))
+        while True:
+            chunk = encrypted_data.read(chunk_size)
+            if len(chunk) == 0:
+                break
+            elif len(chunk) % 16 != 0:
+                chunk += b" " * (16 - len(chunk) % 16)
+            encrypted_file.write(cipher.encrypt(chunk))
+        encrypted_file.seek(0)
+
+        encrypted_file_storage = FileStorage(
+            encrypted_file, filename=file_path + ".enc"
+        )
+        return encrypted_file_storage
+
+
+"""
 def encrypt_file(file_path, key):
     chunk_size = 64 * 1024
     output_file = file_path + ".enc"
@@ -102,9 +130,33 @@ def encrypt_file(file_path, key):
                 outfile.write(cipher.encrypt(chunk))
 
     return output_file
+"""
 
 
 # CBC modunda AES ile sifrelenen dosyayi cozme
+def decrypt_file(file_path: str, key: bytes) -> FileStorage:
+    chunk_size = 64 * 1024
+    with open(file_path, "rb") as file:
+        decrypted_data = io.BytesIO()
+        decrypted_data.write(file.read())
+        decrypted_data.seek(0)
+
+        cipher = AES.new(key, AES.MODE_CBC)
+        decrypted_file = io.BytesIO()
+        iv = decrypted_data.read(16)
+        while True:
+            chunk = decrypted_data.read(chunk_size)
+            if len(chunk) == 0:
+                break
+            decrypted_chunk = cipher.decrypt(chunk)
+            decrypted_file.write(decrypted_chunk.rstrip(b" "))
+        decrypted_file.seek(0)
+
+        decrypted_file_storage = FileStorage(decrypted_file, filename=file_path[:-4])
+        return decrypted_file_storage
+
+
+"""
 def decrypt_file(encrypted_file, key):
     chunk_size = 64 * 1024
     output_file = encrypted_file[:-4]
@@ -123,6 +175,7 @@ def decrypt_file(encrypted_file, key):
                 outfile.write(decrypted_chunk.rstrip(b" "))
 
     return output_file
+"""
 
 
 @app.route("/login", methods=["GET", "POST"])
@@ -143,7 +196,9 @@ def login():
         print()
         if check_password_hash(hashedpw, args.loginpassword):  # parola kontrol
             session["logged_in"] = True
-            return redirect(url_for("upload"))
+            return redirect(
+                url_for("upload")
+            )  # giris yapinca upload sayfasina yonlendir
         else:
             return """
             <!doctype html>
@@ -182,10 +237,16 @@ def upload():
                 )  # beyaz listede degilse yetkisiz erisim
 
         file = request.files["files"]
-        file.save(os.path.join(UPLOAD_FOLDER, file.filename))
+        enc_file = encrypt_file(os.path.join(UPLOAD_FOLDER, file), aes_key_256)
+        enc_file.save(os.path.join(UPLOAD_FOLDER, "encrypted", enc_file + ".enc"))
 
-        files = os.listdir(UPLOAD_FOLDER)
-        files.remove(sys.argv[0])
+        files = os.listdir(os.path.join(UPLOAD_FOLDER, "encrypted"))
+        if "encrypted" in files:
+            files.remove("encrypted")
+        if sys.argv[0] in files:
+            files.remove(sys.argv[0])
+        if sys.argv[0] + ".enc" in files:
+            files.remove(sys.argv[0] + ".enc")
         file_list = "<br>".join(
             [f'<a href="/downloads/{file}">{file}</a>' for file in files]
         )
@@ -288,8 +349,32 @@ def upload():
                     403,
                 )  # beyaz listede degilse yetkisiz erisim
 
-        files = os.listdir(UPLOAD_FOLDER)
-        files.remove(sys.argv[0])
+        if os.path.exists(os.path.join(UPLOAD_FOLDER, "encrypted")):
+            os.removedirs(os.path.join(UPLOAD_FOLDER, "encrypted"))
+
+        if not os.path.exists(os.path.join(UPLOAD_FOLDER, "encrypted")):
+            os.makedirs(os.path.join(UPLOAD_FOLDER, "encrypted"))
+
+        for each_file in os.listdir(UPLOAD_FOLDER):
+            if (
+                each_file.strip() != "encrypted"
+                and each_file.strip() != sys.argv[0]
+                and each_file.strip() != sys.argv[0] + ".enc"
+            ):
+                each_out = encrypt_file(
+                    os.path.join(UPLOAD_FOLDER, each_file), aes_key_256
+                )
+                each_out.save(
+                    os.path.join(UPLOAD_FOLDER, "encrypted", each_file + ".enc")
+                )
+
+        files = os.listdir(os.path.join(UPLOAD_FOLDER, "encrypted"))
+        if "encrypted" in files:
+            files.remove("encrypted")
+        if sys.argv[0] in files:
+            files.remove(sys.argv[0])
+        if sys.argv[0] + ".enc" in files:
+            files.remove(sys.argv[0] + ".enc")
         file_list = "<br>".join(
             [f'<a href="/downloads/{file}">{file}</a>' for file in files]
         )
@@ -398,6 +483,9 @@ def upload():
 
 @app.route("/downloads/<path:filename>", methods=["GET", "POST"])
 def download(filename):
+    if not session.get("logged_in"):
+        return redirect(url_for("login"))
+
     if "all" not in allowed_ips:
         client_ip = request.remote_addr  # istemci ip adresi
         if client_ip not in allowed_ips:
@@ -406,10 +494,14 @@ def download(filename):
                 403,
             )  # beyaz listede degilse yetkisiz erisim
     decrypted_file = decrypt_file(
-        os.path.join(UPLOAD_FOLDER, filename),
+        os.path.join(UPLOAD_FOLDER, "encrypted", filename), aes_key_256
     )
+    decrypted_file.save(os.path.join(UPLOAD_FOLDER, "encrypted", filename[:-4]))
+
     return send_from_directory(
-        directory=UPLOAD_FOLDER, path=decrypted_file, as_attachment=True
+        directory=UPLOAD_FOLDER,
+        path=os.path.join(UPLOAD_FOLDER, "encrypted", filename[:-4]),
+        as_attachment=True,
     )
 
 
