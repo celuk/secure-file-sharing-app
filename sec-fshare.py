@@ -6,6 +6,7 @@ from flask import (
     send_from_directory,
     session,
     render_template,
+    escape,
 )
 import os
 import sys
@@ -77,7 +78,7 @@ def login():
         )  # beyaz listede degilse yetkisiz erisim
 
     if request.method == "POST":
-        password = request.form["password"]
+        password = escape(request.form["password"])
         if password == "admin":  # parola kontrol
             session["logged_in"] = True
             return redirect(url_for("upload"))
